@@ -1,81 +1,131 @@
-name: Build take2
+name: Build EOSignal
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
-  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout EOSignal
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            git \
-            curl \
-            xz-utils \
-            unzip \
-            fakeroot \
-            ldid
+          brew install make ldid
 
-      - name: Install Theos
+      - name: Setup Theos
         run: |
-          git clone --recursive https://github.com/theos/theos.git $HOME/theos
-          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+          set -e
 
-      - name: Install iOS SDK
+          export THEOS="$GITHUB_WORKSPACE/theos"
+          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
+          echo "$THEOS/bin" >> "$GITHUB_PATH"
+
+          git clone --recursive --depth=1 https://github.com/theos/theos.git "$THEOS"
+
+          mkdir -p "$THEOS/sdks"
+
+          curl -L \
+            https://codeload.github.com/theos/sdks/zip/refs/heads/master \
+            -o /tmp/theos-sdks.zip
+
+          unzip -q /tmp/theos-sdks.zip -d /tmp
+
+          cp -a /tmp/sdks-master/*.sdk "$THEOS/sdks/"
+
+          echo "Installed SDKs:"
+          ls -1 "$THEOS/sdks"
+
+      - name: Show Build Environment
         run: |
-          git clone --depth=1 https://github.com/theos/sdks.git /tmp/sdks
-          mkdir -p $HOME/theos/sdks
+          echo "THEOS=$THEOS"
+          echo "Project:"
+          pwd
 
-          SDK=$(find /tmp/sdks -maxdepth 1 -type d -name "iPhoneOS*.sdk" | sort -V | tail -1)
+          echo "Makefile:"
+          cat Makefile
 
-          if [ -z "$SDK" ]; then
-            echo "No iPhoneOS SDK found"
-            exit 1
-          fi
+          echo "Sources:"
+          find Sources -maxdepth 2 -type f -print
 
-          echo "Using SDK: $SDK"
-          cp -R "$SDK" $HOME/theos/sdks/
+          echo "Available SDKs:"
+          ls -lah "$THEOS/sdks"
 
-      - name: Build take2
+          echo "Compiler:"
+          clang --version
+
+      - name: Build EOSignal dylib
         run: |
-          export THEOS=$HOME/theos
+          set -e
+
+          export THEOS="$GITHUB_WORKSPACE/theos"
+          export PATH="$THEOS/bin:$PATH"
 
           make clean
-          make FINALPACKAGE=1 -j1
+          make FINALPACKAGE=1 -j2
 
-      - name: Locate dylib
+      - name: Locate EOSignal dylib
         run: |
-          find .theos -type f -name "take2.dylib" -print
-          mkdir -p artifacts
+          set -e
 
-          DYLIB=$(find .theos -type f -name "take2.dylib" | head -1)
+          echo "Searching build output..."
 
-          if [ -z "$DYLIB" ]; then
-            echo "take2.dylib was not generated"
+          find .theos -type f -name "*.dylib" -print || true
+
+          DYLIB_PATH="$(find .theos -type f -name 'EOSignal.dylib' | head -1)"
+
+          if [ -z "$DYLIB_PATH" ] || [ ! -f "$DYLIB_PATH" ]; then
+            echo "EOSignal.dylib was not generated."
+            echo "Contents of .theos:"
+            find .theos -type f -maxdepth 6 -print || true
             exit 1
           fi
 
-          cp "$DYLIB" artifacts/take2.dylib
-          file artifacts/take2.dylib
-          ls -lh artifacts/take2.dylib
+          echo "Found: $DYLIB_PATH"
 
-      - name: Upload take2 dylib
+          cp "$DYLIB_PATH" "$GITHUB_WORKSPACE/EOSignal.dylib"
+
+      - name: Inspect dylib
+        run: |
+          set -e
+
+          echo "File:"
+          file EOSignal.dylib
+
+          echo
+          echo "Architectures:"
+          lipo -info EOSignal.dylib || true
+
+          echo
+          echo "Linked libraries:"
+          otool -L EOSignal.dylib
+
+          echo
+          echo "Deployment information:"
+          otool -l EOSignal.dylib | grep -A5 -E 'LC_BUILD_VERSION|LC_VERSION_MIN_IPHONEOS' || true
+
+          echo
+          echo "Size:"
+          ls -lh EOSignal.dylib
+
+      - name: Strip EOSignal dylib
+        run: |
+          set -e
+
+          strip -S EOSignal.dylib || true
+
+          echo "Final dylib:"
+          file EOSignal.dylib
+          ls -lh EOSignal.dylib
+
+      - name: Upload EOSignal dylib
         uses: actions/upload-artifact@v4
         with:
-          name: take2-dylib
-          path: artifacts/take2.dylib
+          name: EOSignal-dylib
+          path: EOSignal.dylib
           if-no-files-found: error
+          retention-days: 14
