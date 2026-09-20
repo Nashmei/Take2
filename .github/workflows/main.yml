@@ -1,0 +1,81 @@
+name: Build take2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            git \
+            curl \
+            xz-utils \
+            unzip \
+            fakeroot \
+            ldid
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git $HOME/theos
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+
+      - name: Install iOS SDK
+        run: |
+          git clone --depth=1 https://github.com/theos/sdks.git /tmp/sdks
+          mkdir -p $HOME/theos/sdks
+
+          SDK=$(find /tmp/sdks -maxdepth 1 -type d -name "iPhoneOS*.sdk" | sort -V | tail -1)
+
+          if [ -z "$SDK" ]; then
+            echo "No iPhoneOS SDK found"
+            exit 1
+          fi
+
+          echo "Using SDK: $SDK"
+          cp -R "$SDK" $HOME/theos/sdks/
+
+      - name: Build take2
+        run: |
+          export THEOS=$HOME/theos
+
+          make clean
+          make FINALPACKAGE=1 -j1
+
+      - name: Locate dylib
+        run: |
+          find .theos -type f -name "take2.dylib" -print
+          mkdir -p artifacts
+
+          DYLIB=$(find .theos -type f -name "take2.dylib" | head -1)
+
+          if [ -z "$DYLIB" ]; then
+            echo "take2.dylib was not generated"
+            exit 1
+          fi
+
+          cp "$DYLIB" artifacts/take2.dylib
+          file artifacts/take2.dylib
+          ls -lh artifacts/take2.dylib
+
+      - name: Upload take2 dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: take2-dylib
+          path: artifacts/take2.dylib
+          if-no-files-found: error
